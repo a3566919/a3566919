@@ -1,0 +1,25 @@
+[build-system]
+requires = ["setuptools>=64"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "ashare-main-wave"
+version = "0.1.0"
+description = "A股主升浪起涨点科学识别系统：五维共振量化评分引擎"
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = ["pandas>=2.0", "numpy>=1.24"]
+
+[project.optional-dependencies]
+live = ["akshare>=1.16"]
+ui = ["streamlit>=1.30"]
+dev = ["pytest>=7.0"]
+
+[project.scripts]
+ashare-main-wave = "ashare_main_wave.cli:main"
+
+[tool.setuptools.packages.find]
+include = ["ashare_main_wave*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
