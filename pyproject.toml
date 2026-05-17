@@ -12,6 +12,7 @@ dependencies = ["pandas>=2.0", "numpy>=1.24"]
 
 [project.optional-dependencies]
 live = ["akshare>=1.16"]
+ui = ["streamlit>=1.30"]
 dev = ["pytest>=7.0"]
 
 [project.scripts]

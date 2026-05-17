@@ -86,6 +86,20 @@ stop_loss_price(100.0, cap_size="small", ma20=95.0)  # 三选一取最高（最�
 take_profit_action(0.65, below_ma10=True)            # 分段移动止盈决策
 ```
 
+### Web 仪表盘（Streamlit）
+
+```bash
+pip install -r requirements.txt          # 已含 streamlit
+streamlit run app.py
+```
+
+- **离线演示模式**（默认）：内置三个合成场景（教科书 A / B 档 / D 档），
+  无需 akshare/网络即可体验单股评分（总分·等级·维度贡献条形图·子指标明细·
+  风控方案）与池筛选分桶（狙击池/观察池/排除）。
+- **AkShare 实盘模式**：侧边栏切换，需 `pip install -U akshare`，输入代码/日期/
+  催化剂等定性参数即可对真实个股评分。
+- 离线场景由 `ashare_main_wave.demo_data.DemoProvider` 提供，可复用于回测脚本。
+
 ## 测试
 
 ```bash

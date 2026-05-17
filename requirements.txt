@@ -8,5 +8,8 @@ numpy>=1.24
 #   pip install -U akshare
 # akshare>=1.16
 
+# Web UI dashboard (optional): `streamlit run app.py`
+streamlit>=1.30
+
 # Dev / test
 pytest>=7.0
