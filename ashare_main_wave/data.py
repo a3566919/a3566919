@@ -220,7 +220,7 @@ class HistoricalFrameProvider(DataProvider):
         return out.sort_values("date").reset_index(drop=True)
 
     @staticmethod
-    def _resample(daily, period):
+    def _resample(daily, period, cap=None):
         if daily is None or len(daily) == 0:
             return daily
         rule = "W-FRI" if period == "weekly" else "ME"
@@ -230,14 +230,23 @@ class HistoricalFrameProvider(DataProvider):
                      "amount": "sum"}).dropna(subset=["close"])
         if "turnover" in daily:
             out["turnover"] = g["turnover"].sum()
-        return out.reset_index()
+        out = out.reset_index()
+        # The resample bin is labelled by its period END. Keep only periods
+        # that have fully closed at/under the as-of cap so a half-formed
+        # trailing week/month is never scored as a closed breakout bar
+        # (audit M4 -- live weekly screens use the last *closed* week).
+        if cap is not None and len(out):
+            out = out[out["date"] <= pd.Timestamp(str(cap))]
+        return out.reset_index(drop=True)
 
     # -- DataProvider API -------------------------------------------------
     def kline(self, symbol, period, start, end, adjust="qfq"):
         per = self._k.get(symbol, {})
         df = per.get(period)
         if df is None and period in ("weekly", "monthly") and "daily" in per:
-            df = self._resample(self._clip(per["daily"], end=end), period)
+            cap = self._cap(end)
+            df = self._resample(self._clip(per["daily"], end=end), period,
+                                cap=cap)
             return df if df is not None else normalize_ohlcv(None)
         return self._clip(df, start, end) if df is not None \
             else normalize_ohlcv(None)

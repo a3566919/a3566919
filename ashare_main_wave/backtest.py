@@ -40,22 +40,30 @@ class TradeLeg:
     symbol: str
     grade: str
     entry_date: pd.Timestamp
-    entry_price: float
+    entry_price: float        # incl. entry slippage
     exit_date: pd.Timestamp
-    exit_price: float
+    exit_price: float         # incl. exit slippage
     shares: float
     reason: str
+    commission: float = 0.0   # per-side fraction (so pnl is friction-net)
 
     @property
     def pnl(self) -> float:
-        return (self.exit_price - self.entry_price) * self.shares
+        """Realised cash P&L, **net of commission** (slippage is already in
+        entry/exit price) so it reconciles with the equity curve / metrics."""
+        c = self.commission
+        return (self.exit_price * self.shares * (1 - c)
+                - self.entry_price * self.shares * (1 + c))
 
     @property
     def return_pct(self) -> float:
-        return self.exit_price / self.entry_price - 1.0
+        """Net per-share return (commission + slippage included)."""
+        c = self.commission
+        return (self.exit_price * (1 - c)) / (self.entry_price * (1 + c)) - 1.0
 
     @property
-    def bars_held(self) -> int:
+    def holding_days(self) -> int:
+        """Calendar days held (entry->exit). Not trading bars."""
         return max(0, (self.exit_date - self.entry_date).days)
 
 
@@ -113,8 +121,12 @@ def _rebalance_days(calendar, freq: str):
 def _metrics(equity: pd.Series, trades, initial: float, start, end,
              benchmark: Optional[pd.Series]):
     total_return = float(equity.iloc[-1] / initial - 1.0)
-    days = max(1, (pd.Timestamp(end) - pd.Timestamp(start)).days)
-    cagr = (1 + total_return) ** (365.0 / days) - 1.0
+    # CAGR off the *realised* equity span, not the requested args; don't
+    # annualise sub-month tests (would explode a tiny gain) -- audit M3.
+    span = max(1, (equity.index[-1] - equity.index[0]).days) \
+        if len(equity) > 1 else 1
+    cagr = ((1 + total_return) ** (365.0 / span) - 1.0
+            if span >= 30 else total_return)
     ret = equity.pct_change().dropna()
     vol = float(ret.std() * np.sqrt(252)) if len(ret) > 1 else 0.0
     sharpe = (float(ret.mean() / ret.std() * np.sqrt(252))
@@ -140,11 +152,15 @@ def _metrics(equity: pd.Series, trades, initial: float, start, end,
         if gross_loss > 0 else float("inf") if gross_win > 0 else 0.0,
     }
     if benchmark is not None and len(benchmark) > 1:
+        # Align both series to their common date span before comparing so
+        # alpha is apples-to-apples even if a symbol lists late (audit M5).
         b = benchmark.reindex(equity.index).ffill().dropna()
         if len(b) > 1:
+            common = equity.loc[b.index]
+            strat_r = float(common.iloc[-1] / common.iloc[0] - 1.0)
             bret = float(b.iloc[-1] / b.iloc[0] - 1.0)
             m["benchmark_return"] = bret
-            m["alpha_vs_benchmark"] = total_return - bret
+            m["alpha_vs_benchmark"] = strat_r - bret
     return m
 
 
@@ -236,11 +252,12 @@ class Backtester:
             pos.trimmed.add("tp30")
             return "trim", 1 / 3, "take_profit_30"
 
-        # 4. time stop (spec §7.3.3) -- risk.time_stop_triggered owns the rule
-        held = hist[hist["date"] >= pos.entry_date]
-        if "time" not in pos.trimmed:
-            made_new_high = float(held["close"].max()) > pos.entry_price
-            if time_stop_triggered(len(held), made_new_high, pnl,
+        # 4. time stop (spec §7.3.3): "进场后 10 个交易日" = bars *after*
+        #    entry, so exclude the entry bar from the count (audit C1).
+        after = hist[hist["date"] > pos.entry_date]
+        if "time" not in pos.trimmed and len(after):
+            made_new_high = float(after["close"].max()) > pos.entry_price
+            if time_stop_triggered(len(after), made_new_high, pnl,
                                    risk=self.risk):
                 pos.trimmed.add("time")
                 return "trim", 0.5, "time_stop_half"
@@ -283,7 +300,7 @@ class Backtester:
                 cash += sell * fill * (1 - self.commission)
                 trades.append(TradeLeg(
                     sym, pos.grade, pos.entry_date, pos.entry_price,
-                    day, fill, sell, reason))
+                    day, fill, sell, reason, self.commission))
                 pos.shares -= sell
                 if action == "exit" or pos.shares <= 1e-6:
                     del positions[sym]
@@ -319,6 +336,9 @@ class Backtester:
                         break
                     plan = position_plan(grade, risk=self.risk)
                     budget = plan.initial * equity_now
+                    # skip if we can't fund at least half the spec §7.1 size
+                    # (avoid opening a meaningless stub when nearly fully
+                    # invested); otherwise cap the spend at available cash
                     if budget <= 0 or cash < budget * 0.5:
                         continue
                     budget = min(budget, cash)
@@ -349,7 +369,7 @@ class Backtester:
             cash += pos.shares * px * (1 - self.commission)
             trades.append(TradeLeg(sym, pos.grade, pos.entry_date,
                                    pos.entry_price, last, px, pos.shares,
-                                   "end_of_test"))
+                                   "end_of_test", self.commission))
         eq_vals[-1] = cash if eq_vals else self.cap0
 
         equity = pd.Series(eq_vals, index=pd.DatetimeIndex(eq_dates),
