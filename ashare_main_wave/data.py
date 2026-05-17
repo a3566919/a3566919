@@ -169,3 +169,109 @@ class AkShareProvider(DataProvider):
             return dict(zip(df["item"], df["value"]))
         except Exception:  # noqa: BLE001
             return None
+
+
+class HistoricalFrameProvider(DataProvider):
+    """Point-in-time provider over preloaded full-history frames.
+
+    Used by the back-test engine and for reproducible offline experiments:
+    feed it the *entire* history once; every call clamps the returned frame to
+    ``date <= as_of`` so the scoring engine can never see future bars (the
+    look-ahead guard). The back-tester sets :attr:`as_of` before each scoring
+    pass; leave it ``None`` for ordinary full-history use.
+
+    Parameters
+    ----------
+    klines : ``{symbol: {period: ohlcv_df}}`` -- normalised OHLCV with a
+        ``date`` column (period in ``daily``/``weekly``/``monthly``). If only
+        ``daily`` is supplied, weekly/monthly are resampled on demand.
+    feeds : ``{symbol: {name: df}}`` -- optional capital feeds, each with a
+        ``date`` column; names match the optional ``DataProvider`` methods
+        (``lhb``/``block``/``north``/``survey``/``margin``/``fund_flow``/
+        ``chip``).
+    basic / concepts : ``{symbol: dict}`` / ``{symbol: list}``.
+    concept_rank : a single ranking frame (rarely point-in-time).
+    """
+
+    def __init__(self, klines, *, feeds=None, basic=None, concepts=None,
+                 concept_rank=None, as_of=None):
+        self._k = klines or {}
+        self._f = feeds or {}
+        self._basic = basic or {}
+        self._concepts = concepts or {}
+        self._crank = concept_rank
+        self.as_of = as_of  # YYYYMMDD / pd.Timestamp / None
+
+    # -- helpers ----------------------------------------------------------
+    def _cap(self, end=None):
+        ts = [t for t in (self.as_of, end) if t is not None]
+        return min(pd.Timestamp(str(t)) for t in ts) if ts else None
+
+    def _clip(self, df, start=None, end=None):
+        if df is None or len(df) == 0 or "date" not in df:
+            return df
+        out = df.copy()
+        out["date"] = pd.to_datetime(out["date"])
+        cap = self._cap(end)
+        if cap is not None:
+            out = out[out["date"] <= cap]
+        if start is not None:
+            out = out[out["date"] >= pd.Timestamp(str(start))]
+        return out.sort_values("date").reset_index(drop=True)
+
+    @staticmethod
+    def _resample(daily, period):
+        if daily is None or len(daily) == 0:
+            return daily
+        rule = "W-FRI" if period == "weekly" else "ME"
+        g = daily.set_index("date").resample(rule)
+        out = g.agg({"open": "first", "high": "max", "low": "min",
+                     "close": "last", "volume": "sum",
+                     "amount": "sum"}).dropna(subset=["close"])
+        if "turnover" in daily:
+            out["turnover"] = g["turnover"].sum()
+        return out.reset_index()
+
+    # -- DataProvider API -------------------------------------------------
+    def kline(self, symbol, period, start, end, adjust="qfq"):
+        per = self._k.get(symbol, {})
+        df = per.get(period)
+        if df is None and period in ("weekly", "monthly") and "daily" in per:
+            df = self._resample(self._clip(per["daily"], end=end), period)
+            return df if df is not None else normalize_ohlcv(None)
+        return self._clip(df, start, end) if df is not None \
+            else normalize_ohlcv(None)
+
+    def _feed(self, symbol, name, start=None, end=None):
+        df = self._f.get(symbol, {}).get(name)
+        return self._clip(df, start, end) if df is not None else None
+
+    def lhb(self, symbol, start, end):
+        return self._feed(symbol, "lhb", start, end)
+
+    def block_trade(self, symbol, start, end):
+        return self._feed(symbol, "block", start, end)
+
+    def northbound(self, symbol, start, end):
+        return self._feed(symbol, "north", start, end)
+
+    def institution_survey(self, symbol, start, end):
+        return self._feed(symbol, "survey", start, end)
+
+    def margin(self, symbol, start, end):
+        return self._feed(symbol, "margin", start, end)
+
+    def fund_flow(self, symbol):
+        return self._feed(symbol, "fund_flow")
+
+    def chip(self, symbol):
+        return self._feed(symbol, "chip")
+
+    def concepts_of(self, symbol):
+        return self._concepts.get(symbol)
+
+    def concept_rank(self):
+        return self._crank
+
+    def basic_info(self, symbol):
+        return self._basic.get(symbol)

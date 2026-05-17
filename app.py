@@ -87,7 +87,8 @@ with st.sidebar:
         "- 维度：月线盘整 / 月线突破 / 日线趋势 / 主力行为 / 热点共振\n"
         "- 七大一票否决任一触发即归 D 级")
 
-tab_score, tab_screen = st.tabs(["📊 单股评分", "🔍 池筛选"])
+tab_score, tab_screen, tab_bt = st.tabs(
+    ["📊 单股评分", "🔍 池筛选", "📈 回测"])
 
 with tab_score:
     col_in, col_out = st.columns([1, 2])
@@ -209,3 +210,58 @@ with tab_screen:
                          use_container_width=True)
         if sr.errors:
             st.warning(f"{len(sr.errors)} 个标的评分异常（已跳过）")
+
+with tab_bt:
+    st.markdown("走查回测：逐周（spec §9.1）评分建仓，按 spec §7 止损/移动"
+                "止盈/时间止损管理持仓，统计净值与绩效。")
+    if mode == "离线演示":
+        st.caption("内置约 6 年合成历史：000001 龙头（长底盘整→主升浪→"
+                    "退潮），000002 陪跑（始终震荡不达标）。")
+        bc1, bc2, bc3 = st.columns(3)
+        rebal = bc1.selectbox("调仓频率", ["W", "M", "D"], index=0)
+        maxpos = bc2.number_input("最大持仓数", 1, 10, 2)
+        mingr = bc3.selectbox("最低入场等级", ["A+", "A", "B"], index=2)
+        if st.button("▶ 运行回测", type="primary"):
+            from ashare_main_wave import Backtester, HistoricalFrameProvider
+            from ashare_main_wave.demo_data import demo_history
+            h = demo_history()
+            prov = HistoricalFrameProvider(**h)
+            win = h["klines"]["000001"]["daily"]
+            with st.spinner("回测中…"):
+                bt = Backtester(
+                    prov, rebalance=rebal, max_positions=int(maxpos),
+                    min_grade=mingr,
+                    score_kwargs_fn=lambda s: (
+                        {"catalysts": 2, "leader_rank": 1,
+                         "limitups_in_sector": 12} if s == "000001" else {}))
+                res = bt.run(list(h["klines"]),
+                             win["date"].iloc[420].strftime("%Y%m%d"),
+                             win["date"].iloc[-1].strftime("%Y%m%d"))
+            mt = res.metrics
+            k1, k2, k3, k4 = st.columns(4)
+            k1.metric("总收益", f"{mt['total_return']*100:.1f}%")
+            k2.metric("年化", f"{mt['cagr']*100:.1f}%")
+            k3.metric("最大回撤", f"{mt['max_drawdown']*100:.1f}%")
+            k4.metric("夏普", f"{mt['sharpe']:.2f}")
+            curve = res.equity.rename("策略").to_frame()
+            if res.benchmark is not None:
+                curve["等权基准"] = res.benchmark.reindex(
+                    res.equity.index).ffill()
+            st.line_chart(curve)
+            k5, k6, k7 = st.columns(3)
+            k5.metric("交易腿数", mt["num_trades"])
+            k6.metric("胜率", f"{mt['win_rate']*100:.0f}%")
+            pf = mt["profit_factor"]
+            k7.metric("盈亏比", "∞" if pf == float("inf")
+                      else f"{pf:.2f}")
+            tf = res.trades_frame()
+            if len(tf):
+                st.subheader("交易明细")
+                st.dataframe(tf, hide_index=True,
+                             use_container_width=True)
+            with st.expander("绩效全量"):
+                st.json(res.summary())
+    else:
+        st.info("实盘回测需点对点历史数据源（akshare 按 start/end 取数）。"
+                "可在 CLI 使用：`python -m ashare_main_wave backtest "
+                "--universe 300308,688256 --start 20210101 --end 20241231`")

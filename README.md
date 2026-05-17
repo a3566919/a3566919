@@ -86,6 +86,37 @@ stop_loss_price(100.0, cap_size="small", ma20=95.0)  # 三选一取最高（最�
 take_profit_action(0.65, below_ma10=True)            # 分段移动止盈决策
 ```
 
+### 回测引擎
+
+走查回测：逐周（spec §9.1）点对点评分建仓，按 spec §7 止损 / 分段移动止盈 /
+时间止损管理持仓，输出净值曲线与绩效（总收益、年化、最大回撤、夏普、胜率、
+盈亏比、相对等权基准的超额）。
+
+```python
+from ashare_main_wave import Backtester, HistoricalFrameProvider
+from ashare_main_wave.demo_data import demo_history
+
+h = demo_history()                          # 内置离线合成历史
+bt = Backtester(HistoricalFrameProvider(**h), rebalance="W",
+                max_positions=2, min_grade="B")
+res = bt.run(list(h["klines"]), "20210215", "20241231")
+print(res.summary())
+print(res.trades_frame())
+```
+
+```bash
+python -m ashare_main_wave backtest --demo            # 离线合成历史
+python -m ashare_main_wave backtest --universe 300308,688256 \
+        --start 20210101 --end 20241231               # 实盘(需 akshare)
+```
+
+- **无未来函数**：`HistoricalFrameProvider` 按 `date <= as_of` 裁剪所有返回帧，
+  回测引擎在每个调仓日把 `as_of` 设为当日，评分只见历史数据。
+- 成交按当日收盘价撮合（含手续费/滑点）；支持分段减仓（止盈 1/3、1/2、
+  时间止损半仓、>100% 启用 8% 移动止盈）。
+- 真实回测须用点对点数据源（`HistoricalFrameProvider` 或 akshare 按 start/end
+  取数）；固定窗口的 `DemoProvider` 不可用于回测。
+
 ### Web 仪表盘（Streamlit）
 
 ```bash
@@ -93,12 +124,14 @@ pip install -r requirements.txt          # 已含 streamlit
 streamlit run app.py
 ```
 
-- **离线演示模式**（默认）：内置三个合成场景（教科书 A / B 档 / D 档），
-  无需 akshare/网络即可体验单股评分（总分·等级·维度贡献条形图·子指标明细·
-  风控方案）与池筛选分桶（狙击池/观察池/排除）。
-- **AkShare 实盘模式**：侧边栏切换，需 `pip install -U akshare`，输入代码/日期/
-  催化剂等定性参数即可对真实个股评分。
-- 离线场景由 `ashare_main_wave.demo_data.DemoProvider` 提供，可复用于回测脚本。
+- 三个标签页：**单股评分** / **池筛选** / **回测**。
+- **离线演示模式**（默认）：无需 akshare/网络。单股评分与池筛选用三个合成
+  场景（教科书 A / B 档 / D 档）；回测用内置约 6 年合成历史跑净值曲线、
+  绩效与交易明细。
+- **AkShare 实盘模式**：侧边栏切换，需 `pip install -U akshare`，输入代码/
+  日期/催化剂等定性参数即可对真实个股评分。
+- 离线数据由 `ashare_main_wave.demo_data`（`DemoProvider` / `demo_history`）
+  提供，可复用于脚本与回测。
 
 ## 测试
 

@@ -249,3 +249,96 @@ class DemoProvider(DataProvider):
 
     def basic_info(self, symbol):
         return _basic()
+
+
+# ---------------------------------------------------------------------------
+# Multi-year point-in-time history for the back-test engine
+# ---------------------------------------------------------------------------
+def _bdays(n, end="2024-12-31"):
+    return pd.bdate_range(end=pd.Timestamp(end), periods=n)
+
+
+def _winner_daily():
+    """run-up -> deep decline -> long flat base -> 主升浪 -> distribution.
+
+    Designed so the resampled monthly/weekly + this daily reproduce a
+    textbook A setup right at the breakout, then trend up ~3.5x before a
+    drawdown that trips the trailing / pattern stops.
+    """
+    runup = np.linspace(30, 100, 240)
+    decline = np.linspace(100, 42, 160)
+    base = 42 + 2.0 * np.sin(np.linspace(0, 10.0, 620))     # ~30m tight base
+    launch = np.linspace(42, 96, 32)                        # sharp 主升浪 leg
+    wave, cur = [], 96.0                                     # then stair up
+    while len(wave) < 250:
+        wave += list(np.linspace(cur, cur + 11, 7))
+        wave += list(np.linspace(cur + 11, cur + 8, 4))
+        cur += 8
+    wave = np.array(wave[:250])
+    dist = np.linspace(float(wave[-1]), float(wave[-1]) * 0.55, 130)
+    closes = np.concatenate([runup, decline, base, launch, wave, dist])
+    n = len(closes)
+    df = _ohlcv(_bdays(n), closes, amp=0.02, vol=8.0e5)
+    df["turnover"] = 0.09
+    b0, b1 = 400, 400 + 620                                  # quiet base
+    df.loc[df.index[b0:b1], "volume"] = np.linspace(9e5, 3e5, b1 - b0)
+    df.loc[df.index[b1:b1 + 32], "volume"] = 6.0e6           # launch surge
+    df.loc[df.index[b1 + 32:b1 + 282], "volume"] = np.linspace(
+        4.0e6, 2.5e6, 250)                                   # wave volume
+    return _sync_amount(df)
+
+
+def _laggard_daily():
+    """A never-qualifying chop stock (no decisive base/breakout)."""
+    n = 1450
+    closes = 50 + 6 * np.sin(np.linspace(0, 60, n))
+    df = _ohlcv(_bdays(n), closes, amp=0.02, vol=6e5)
+    df["turnover"] = 0.03
+    return _sync_amount(df)
+
+
+def demo_history():
+    """Return kwargs for :class:`~ashare_main_wave.data.HistoricalFrameProvider`.
+
+    Two symbols: ``"000001"`` is the textbook winner, ``"000002"`` a laggard.
+    Capital feeds are stamped across the breakout + main-wave window so the
+    point-in-time clip keeps them only once the move is underway.
+    """
+    win = _winner_daily()
+    lag = _laggard_daily()
+    wave_dates = win["date"].iloc[1020:1330].reset_index(drop=True)
+    fd = pd.DataFrame({
+        "date": wave_dates,
+        "主力净流入-净额": np.linspace(3e7, 9e7, len(wave_dates)),
+    })
+    chip = _chip_strong(len(wave_dates)).copy()
+    chip.insert(0, "date", wave_dates)
+    feeds = {"000001": {
+        "lhb": pd.DataFrame({
+            "date": wave_dates.iloc[::20].reset_index(drop=True),
+            "营业部名称": ["机构专用"] * len(wave_dates.iloc[::20]),
+            "净额": [8e7] * len(wave_dates.iloc[::20]),
+        }),
+        "north": pd.DataFrame({
+            "date": wave_dates,
+            "持股比例": np.linspace(1.0, 2.4, len(wave_dates)),
+        }),
+        "survey": pd.DataFrame({
+            "date": wave_dates.iloc[::15].reset_index(drop=True),
+            "机构名称": [f"基金{i}" for i in
+                         range(len(wave_dates.iloc[::15]))],
+        }),
+        "margin": pd.DataFrame({
+            "date": wave_dates,
+            "融资余额": np.linspace(1.0e8, 1.5e8, len(wave_dates)),
+        }),
+        "fund_flow": fd,
+        "chip": chip,
+    }}
+    return dict(
+        klines={"000001": {"daily": win}, "000002": {"daily": lag}},
+        feeds=feeds,
+        concepts={"000001": ["人工智能", "半导体", "算力"]},
+        concept_rank=_concept_rank(["人工智能", "半导体", "算力"]),
+        basic={"000001": _basic("演示龙头"), "000002": _basic("演示陪跑")},
+    )
