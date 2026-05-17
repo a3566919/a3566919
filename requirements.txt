@@ -1,0 +1,12 @@
+# Core scoring engine (always required)
+pandas>=2.0
+numpy>=1.24
+
+# Live data provider (optional). AkShare's pinned `jsonpath` dep fails to
+# build on some Python 3.11 images; the engine works offline without it via
+# a custom DataProvider. Install when you need live data:
+#   pip install -U akshare
+# akshare>=1.16
+
+# Dev / test
+pytest>=7.0
