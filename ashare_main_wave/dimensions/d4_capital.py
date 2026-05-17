@@ -39,7 +39,6 @@ def _half_score(sub: dict, weights: dict):
 def _s_lhb(lhb, float_mktcap, th):
     if lhb is None or len(lhb) == 0:
         return None, {}
-    seat_col = _find_col(lhb, "营业部") or _find_col(lhb, "交易营业部")
     net_col = _find_col(lhb, "净额") or _find_col(lhb, "净买入")
     if net_col is None:
         return None, {}
