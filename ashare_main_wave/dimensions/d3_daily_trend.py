@@ -22,13 +22,26 @@ def score_d3(daily: pd.DataFrame, d2_metrics: dict,
 
     last_close = float(close.iloc[-1])
 
-    # --- veto (spec 4.4.3): close < MA20 and not recovered within 3 days ---
+    # --- veto (spec 4.4.3): broke below MA20 and not reclaimed within
+    # `rec` days. Find the most recent downward cross of MA20; veto only if
+    # currently still below, no close has reclaimed MA20 since the cross, and
+    # the grace window has elapsed (audit M6: was an all-below run check).
     rec = th.d3_ma20_recover_days
-    below = (close.iloc[-rec - 1:] < ma20.iloc[-rec - 1:])
+    below = (close < ma20).to_numpy()
     metrics = {"last_close": last_close, "ma20": float(ma20.iloc[-1])}
-    if bool(below.iloc[-1]) and bool(below.iloc[-rec:].all()):
-        return DimensionResult("d3", 0.0, w, metrics=metrics,
-                               veto="日线跌破 MA20 且 3 日未收复")
+    n = len(below)
+    if below[-1]:
+        cross = next((i for i in range(n - 1, 0, -1)
+                      if below[i] and not below[i - 1]), None)
+        if cross is None and below.all():
+            cross = 0  # below for the entire window -> long broken
+        if cross is not None:
+            days_since = (n - 1) - cross
+            reclaimed = (~below[cross:]).any()
+            if not reclaimed and days_since >= rec:
+                return DimensionResult(
+                    "d3", 0.0, w, metrics=metrics,
+                    veto=f"日线跌破 MA20 且 {rec} 日未收复")
     if dead_cross(dif, dea, lookback=3):
         return DimensionResult("d3", 0.0, w, metrics=metrics,
                                veto="日线 MACD 死叉")

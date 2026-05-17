@@ -1,9 +1,9 @@
 """Composite 5-dimension scoring, grading and the 7 one-vote vetoes.
 
 Total scale (spec 4.1-4.4):
-    total = (d1c + d2c + d3c + d4c + d5c) * 10            in [0, 100]
-where each ``*c`` is ``DimensionResult.contribution`` = score*weight (so the
-sum is in [0, 10] and ``*10`` lifts it to the 0..100 grade scale).
+    total = d1c + d2c + d3c + d4c + d5c                   in [0, 100]
+where each ``*c`` is ``DimensionResult.contribution`` = score*weight*10, i.e.
+points out of 100 (spec 4.1 case study: 17.5+18+12+22.5+15 = 85).
 
 Note on veto rule 6 ("主力行为 < 30%"): the spec's section-10 pseudo-code
 checks only the 4B slice (``d4 < 0.13*0.3*10``) -- that is a transcription
@@ -36,7 +36,10 @@ def _is_restricted(name: Optional[str], basic: Optional[dict]) -> Optional[str]:
     nm = name or ""
     if basic:
         nm = str(basic.get("股票简称") or basic.get("简称") or nm)
-    if "ST" in nm.upper():
+    # A-share risk-warning names carry ST/*ST/SST as a leading token, not as
+    # an arbitrary substring (audit M5: avoid "STARK"-type false positives).
+    nm_u = nm.upper().replace(" ", "")
+    if nm_u.startswith(("ST", "*ST", "SST", "S*ST")):
         return f"风险警示股（{nm}）"
     blob = " ".join(str(v) for v in basic.values()) if basic else ""
     for bad in ("退市风险", "立案调查", "立案"):
@@ -149,8 +152,9 @@ def score_stock(symbol: str, end_date: str, provider: DataProvider, *,
         res.notes.append("一票否决触发，归入 D 级")
         return res
 
-    contributions = sum(d.contribution for d in res.dimensions.values())
-    res.total = round(contributions * 10.0, 2)
+    # contribution == score*weight*10 is already points-out-of-100
+    # (spec 4.1 case study: 17.5+18+12+22.5+15 = 85). Do NOT re-scale.
+    res.total = round(sum(d.contribution for d in res.dimensions.values()), 2)
     res.grade = grade_for(res.total)
     return res
 

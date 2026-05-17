@@ -13,9 +13,8 @@ import pandas as pd
 
 from ..config import (D4A_SUB_WEIGHTS, D4A_WEIGHT, D4B_SUB_WEIGHTS,
                        D4B_WEIGHT, DEFAULT_THRESHOLDS)
-from ..indicators import ma
 from ..types import DimensionResult
-from ..utils import score_band, score_ge, score_le, weighted
+from ..utils import score_band, score_ge, score_le
 
 
 def _find_col(df: pd.DataFrame, *keywords):
@@ -26,8 +25,13 @@ def _find_col(df: pd.DataFrame, *keywords):
     return None
 
 
-def _num(series) -> float:
-    return float(pd.to_numeric(series, errors="coerce").fillna(0).sum())
+def _half_score(sub: dict, weights: dict):
+    """Half (4A/4B) score over the FULL weight table (missing feeds = 0;
+    tables sum to 1.0 -> result in [0, 10]). Returns None when the half has
+    no feeds at all so it can be dropped from the blend."""
+    if not sub:
+        return None
+    return sum(sub.get(k, 0) * wt for k, wt in weights.items())
 
 
 # --- 4A public-data feeds --------------------------------------------------
@@ -250,17 +254,29 @@ def score_d4(*, daily=None, lhb=None, block=None, north=None, survey=None,
         if val is not None:
             sub_b[key] = val
 
-    score_a = weighted(sub_a, D4A_SUB_WEIGHTS) if sub_a else 0.0
-    score_b = weighted(sub_b, D4B_SUB_WEIGHTS) if sub_b else 0.0
+    # Score a present half over its FULL sub-weight table (missing feeds = 0,
+    # tables sum to 1.0). A single feed therefore cannot inflate the half, so
+    # the global "<30% of max" veto still works as a 主力 quality floor
+    # (audit M2). A half with zero feeds returns None and is dropped from the
+    # blend so offline price-action-only runs stay scorable (audit M3).
+    score_a = _half_score(sub_a, D4A_SUB_WEIGHTS)
+    score_b = _half_score(sub_b, D4B_SUB_WEIGHTS)
 
     # contribution-equivalent score on the 0..10 scale so DimensionResult.
     # contribution (= score*weight*10) matches d4a*0.12 + d4b*0.13 (spec 4.1).
-    total_w = D4A_WEIGHT + D4B_WEIGHT
-    blended = (score_a * D4A_WEIGHT + score_b * D4B_WEIGHT) / total_w
+    if score_a is None and score_b is None:
+        blended = 0.0
+    elif score_a is None:
+        blended = score_b
+    elif score_b is None:
+        blended = score_a
+    else:
+        blended = ((score_a * D4A_WEIGHT + score_b * D4B_WEIGHT)
+                   / (D4A_WEIGHT + D4B_WEIGHT))
 
     sub = {f"4A.{k}": v for k, v in sub_a.items()}
     sub.update({f"4B.{k}": v for k, v in sub_b.items()})
-    metrics["d4a_score"] = round(score_a, 2)
-    metrics["d4b_score"] = round(score_b, 2)
-    return DimensionResult("d4", blended, total_w, subscores=sub,
-                           metrics=metrics)
+    metrics["d4a_score"] = None if score_a is None else round(score_a, 2)
+    metrics["d4b_score"] = None if score_b is None else round(score_b, 2)
+    return DimensionResult("d4", blended, D4A_WEIGHT + D4B_WEIGHT,
+                           subscores=sub, metrics=metrics)

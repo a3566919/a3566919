@@ -63,8 +63,12 @@ def score_d5(*, sector_percentile=None, strong_concept_count=0,
         sub["limitups"] = score_ge(limitups_in_sector, th.d5_limitups_base,
                                    th.d5_limitups_full)
 
-    sub["catalyst"] = score_ge(catalyst_count, th.d5_catalyst_base,
-                               th.d5_catalyst_full)
+    # 5.4 is analyst-supplied; when no catalyst is provided, omit the
+    # sub-indicator (graceful, like strength/limitups/leader) instead of
+    # injecting a hard 0 that depresses every un-annotated stock (audit M7).
+    if catalyst_count:
+        sub["catalyst"] = score_ge(catalyst_count, th.d5_catalyst_base,
+                                   th.d5_catalyst_full)
 
     if leader_rank is not None:
         if leader_rank == 1:
